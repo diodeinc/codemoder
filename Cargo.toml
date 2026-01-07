@@ -1,0 +1,31 @@
+[package]
+name = "codemoder"
+version = "0.1.0"
+edition = "2024"
+description = "MCP proxy server that adds code-mode capability - lets models write JavaScript to call tools"
+license = "MIT"
+
+[[bin]]
+name = "codemoder"
+path = "src/main.rs"
+
+[[bin]]
+name = "mock-mcp-server"
+path = "src/bin/mock_server.rs"
+
+[dependencies]
+rmcp = { version = "0.11", features = ["server", "client", "macros", "transport-io", "transport-child-process"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1.0"
+anyhow = "1.0"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rquickjs = { version = "0.9", features = ["full-async", "parallel"] }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tokio-util = "0.7"
