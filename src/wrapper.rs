@@ -9,6 +9,58 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
+/// Convert a JSON value to Content items.
+/// Recognizes image objects with {type: "image", data: "...", mimeType: "..."} format
+/// and converts them back to proper Content::image.
+fn json_to_content(value: &serde_json::Value) -> Vec<Content> {
+    // Check if it's an image object
+    if let Some(obj) = value.as_object() {
+        if obj.get("type").and_then(|v| v.as_str()) == Some("image") {
+            if let (Some(data), Some(mime_type)) = (
+                obj.get("data").and_then(|v| v.as_str()),
+                obj.get("mimeType").and_then(|v| v.as_str()),
+            ) {
+                return vec![Content::image(data, mime_type)];
+            }
+        }
+        // Check if it has a "result" field (from logs wrapper)
+        if let Some(result) = obj.get("result") {
+            let mut content = json_to_content(result);
+            if let Some(logs) = obj.get("logs") {
+                if let Some(logs_arr) = logs.as_array() {
+                    if !logs_arr.is_empty() {
+                        content.push(Content::text(format!(
+                            "Logs:\n{}",
+                            logs_arr
+                                .iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )));
+                    }
+                }
+            }
+            return content;
+        }
+    }
+
+    // Check if it's an array that might contain images
+    if let Some(arr) = value.as_array() {
+        let mut content = Vec::new();
+        for item in arr {
+            content.extend(json_to_content(item));
+        }
+        if !content.is_empty() {
+            return content;
+        }
+    }
+
+    // Default: convert to text
+    vec![Content::text(
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
+    )]
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ExecuteCodeParams {
     #[schemars(
@@ -208,16 +260,15 @@ impl<H: ServerHandler + Send + Sync + 'static> ServerHandler for CodeModeWrapper
                     "error": result.error_message.as_deref().unwrap_or("Unknown error"),
                     "logs": result.logs
                 });
-                Content::text(serde_json::to_string_pretty(&error_response).unwrap_or_default())
+                vec![Content::text(
+                    serde_json::to_string_pretty(&error_response).unwrap_or_default(),
+                )]
             } else {
-                Content::text(
-                    serde_json::to_string_pretty(&response_value)
-                        .unwrap_or_else(|_| response_value.to_string()),
-                )
+                json_to_content(&response_value)
             };
 
             return Ok(CallToolResult {
-                content: vec![content],
+                content,
                 is_error: Some(result.is_error),
                 structured_content: None,
                 meta: None,
@@ -225,5 +276,58 @@ impl<H: ServerHandler + Send + Sync + 'static> ServerHandler for CodeModeWrapper
         }
 
         self.inner.call_tool(request, context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_to_content_text() {
+        let value = serde_json::json!("hello world");
+        let content = json_to_content(&value);
+        assert_eq!(content.len(), 1);
+        assert!(content[0].as_text().is_some());
+    }
+
+    #[test]
+    fn test_json_to_content_image() {
+        let value = serde_json::json!({
+            "type": "image",
+            "data": "SGVsbG8=",
+            "mimeType": "image/png"
+        });
+        let content = json_to_content(&value);
+        assert_eq!(content.len(), 1);
+        let img = content[0].as_image().expect("should be image content");
+        assert_eq!(img.data, "SGVsbG8=");
+        assert_eq!(img.mime_type, "image/png");
+    }
+
+    #[test]
+    fn test_json_to_content_array_with_images() {
+        let value = serde_json::json!([
+            {"type": "image", "data": "abc123", "mimeType": "image/png"},
+            "some text"
+        ]);
+        let content = json_to_content(&value);
+        assert_eq!(content.len(), 2);
+        assert!(content[0].as_image().is_some());
+        assert!(content[1].as_text().is_some());
+    }
+
+    #[test]
+    fn test_json_to_content_result_with_logs() {
+        let value = serde_json::json!({
+            "result": {"type": "image", "data": "abc123", "mimeType": "image/png"},
+            "logs": ["log1", "log2"]
+        });
+        let content = json_to_content(&value);
+        assert_eq!(content.len(), 2);
+        assert!(content[0].as_image().is_some());
+        let text = content[1].as_text().expect("should have logs text");
+        assert!(text.text.contains("log1"));
+        assert!(text.text.contains("log2"));
     }
 }
