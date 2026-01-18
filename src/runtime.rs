@@ -280,6 +280,12 @@ fn format_call_result(result: &CallToolResult) -> String {
         .map(|c| {
             if let Some(text) = c.as_text() {
                 serde_json::Value::String(text.text.clone())
+            } else if let Some(image) = c.as_image() {
+                serde_json::json!({
+                    "type": "image",
+                    "data": image.data,
+                    "mimeType": image.mime_type
+                })
             } else {
                 serde_json::Value::Null
             }
@@ -386,5 +392,50 @@ mod tests {
         let runtime = JsRuntime::new().await.unwrap();
         let result = runtime.execute(r#""hello world""#).await.unwrap();
         assert_eq!(result, serde_json::json!("hello world"));
+    }
+
+    #[test]
+    fn test_format_call_result_with_text() {
+        use rmcp::model::{CallToolResult, Content};
+
+        let result = CallToolResult::success(vec![Content::text("hello")]);
+        let formatted = format_call_result(&result);
+        assert_eq!(formatted, "hello");
+    }
+
+    #[test]
+    fn test_format_call_result_with_image() {
+        use rmcp::model::{CallToolResult, Content};
+
+        let result = CallToolResult::success(vec![Content::image("SGVsbG8=", "image/png")]);
+        let formatted = format_call_result(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&formatted).unwrap();
+
+        assert!(parsed.is_array());
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["type"], "image");
+        assert_eq!(arr[0]["data"], "SGVsbG8=");
+        assert_eq!(arr[0]["mimeType"], "image/png");
+    }
+
+    #[test]
+    fn test_format_call_result_with_mixed_content() {
+        use rmcp::model::{CallToolResult, Content};
+
+        let result = CallToolResult::success(vec![
+            Content::text("description"),
+            Content::image("SGVsbG8=", "image/png"),
+        ]);
+        let formatted = format_call_result(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&formatted).unwrap();
+
+        assert!(parsed.is_array());
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0], "description");
+        assert_eq!(arr[1]["type"], "image");
+        assert_eq!(arr[1]["data"], "SGVsbG8=");
+        assert_eq!(arr[1]["mimeType"], "image/png");
     }
 }
